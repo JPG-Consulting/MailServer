@@ -20,6 +20,90 @@ PAM_MYSQL_CRYPTO=0
 # ====================================================================
 #                            Functions
 # ====================================================================
+
+function package_install() {
+	local __packages=""
+
+	if [ "$#" -lt 1 ]; then
+    	echo "Error: package_install: Illegal number of parameters"
+		exit 1
+	fi
+
+	for i in ${@}; do
+		if ! package_is_installed $i; then
+			if [ -z "$__packages" ]; then
+				__packages="$i"
+			else
+				__packages="$__packages $i"
+			fi
+		fi
+	done
+
+	if [ -n "$__packages" ]; then
+		if ! apt-get -y -qq install "$__packages"; then
+			# retry failed packages one at a time
+			for i in $__packages; do
+				if ! package_is_installed $i; then
+					if ! apt-get -y -qq install "$i"; then
+						echo "Error installing $i"
+						exit 1
+					fi
+				fi
+			done
+		fi
+	fi
+}
+
+function package_is_installed() {
+	local __resultvar=0;
+
+	if [ "$#" -lt 1 ]; then
+    	echo "Error: package_is_installed: Illegal number of parameters"
+		exit 1
+	fi
+
+	for i in ${@}; do
+		if ! dpkg -l $i > /dev/null 2>&1; then
+			__resultvar=1
+			break
+		fi
+	done
+	return $__resultvar
+}
+
+function package_remove() {
+	local __packages=""
+
+	if [ "$#" -lt 1 ]; then
+    	echo "Error: package_remove: Illegal number of parameters"
+		exit 1
+	fi
+
+	for i in ${@}; do
+		if package_is_installed $i; then
+			if [ -z "$__packages" ]; then
+				__packages="$i"
+			else
+				__packages="$__packages $i"
+			fi
+		fi
+	done
+
+	if [ -n "$__packages" ]; then
+		if ! apt-get -y -qq --purge remove "$__packages"; then
+			# retry failed packages one at a time
+			for i in $__packages; do
+				if package_is_installed $i; then
+					if ! apt-get -y -qq --purge remove "$i"; then
+						echo "Error removing $i"
+						exit 1
+					fi
+				fi
+			done
+		fi
+	fi
+}
+
 function read_password() {
 	local __resultvar=$1
 	local __passwd=""
@@ -27,6 +111,7 @@ function read_password() {
 
 	if [ "$#" -ne 1 ]; then
     	echo "Error: read_password: Illegal number of parameters"
+		exit 1
 	fi
 
 	while true; do
@@ -47,6 +132,17 @@ function read_password() {
 	done
 	
 	eval $__resultvar="'$__passwd'"
+}
+
+function system_service() {
+	if [ "$#" -lt 2 ]; then
+    	echo "Error: system_service: Illegal number of parameters"
+		exit 1
+	fi
+
+	for i in ${@:2}; do
+		/etc/init.d/$i $1
+	done
 }
 
 # ====================================================================
@@ -156,9 +252,7 @@ if ! grep -i '^AllowGroups ' /etc/ssh/sshd_config; then
 fi
 
 # Secure SSHd using DenyHosts
-apt-get -y -qq denyhosts
-
-
+package_install denyhosts
 
 # --------------------------------------------------------------------
 #                       Database setup
@@ -166,8 +260,8 @@ apt-get -y -qq denyhosts
 case "$DATABASE_PACKAGE" in
 	mysql)
 		echo "Installing MySQL"
-		apt-get -y -qq install mysql-server
-		apt-get -y -qq install libpam-mysql
+		package_install mysql-server mysql-client
+		package_install libpam-mysql
 
 		mysql -uroot -e "CREATE DATABASE IF NOT EXISTS $DATABASE_DBNAME;"
 		mysql -uroot -e "CREATE TABLE IF NOT EXISTS $DATABASE_DBNAME.accounts (id int(10) unsigned NOT NULL AUTO_INCREMENT, type varchar(32) CHARACTER SET ascii NOT NULL DEFAULT 'plain', password text CHARACTER SET ascii COLLATE ascii_bin, PRIMARY KEY (id)) ENGINE=InnoDB  DEFAULT CHARSET=utf8;"
@@ -225,11 +319,11 @@ esac
 # --------------------------------------------------------------------
 echo "Installing Postfix MTA."
 # Suggests: postfix-mysql postfix-ldap postfix-pcre libsasl2-modules dovecot-common resolvconf postfix-cdb ufw postfix-doc
-apt-get -y -qq install postfix postfix-mysql
+package_install postfix postfix-mysql
 
 # Remove the default sendmail
-apt-get -y -qq --purge remove sendmail sendmail-cf sendmail-doc
-apt-get -y -qq --purge remove sendmail-base
+package_remove sendmail sendmail-cf sendmail-doc
+package_remove sendmail-base
 
 case "$DATABASE_PACKAGE" in
 	mysql)
@@ -292,7 +386,7 @@ iptables -A OUTPUT -p tcp --sport 25 -m state --state ESTABLISHED -j ACCEPT
 # --------------------------------------------------------------------
 
 echo "Installing Cyrus IMAPd"
-apt-get -y -qq install cyrus-imapd cyrus-admin cyrus-common libsasl2-modules libsasl2-2 sasl2-bin
+package_install cyrus-imapd cyrus-admin cyrus-common libsasl2-modules libsasl2-2 sasl2-bin
 
 # Allow IMAP traffic
 iptables -A INPUT -i eth0 -p tcp --dport 143 -m state --state NEW,ESTABLISHED -j ACCEPT
@@ -304,7 +398,7 @@ iptables -A OUTPUT -o eth0 -p tcp --sport 143 -m state --state ESTABLISHED -j AC
 # --------------------------------------------------------------------
 
 echo "Installing Apache"
-apt-get -y -qq install apache2
+package_install apache2
 
 # Allow Incoming HTTP and HTTPS
 iptables -A INPUT -p tcp --dport 80 -m state --state NEW,ESTABLISHED -j ACCEPT
@@ -317,7 +411,7 @@ iptables -A OUTPUT -p tcp --sport 443 -m state --state ESTABLISHED -j ACCEPT
 # --------------------------------------------------------------------
 
 echo "Installing PHP"
-apt-get -y -qq install php5 php-pear php5-mysql
+package_install php5 php-pear php5-mysql
 
 # --------------------------------------------------------------------
 #                          Final setup
@@ -325,9 +419,14 @@ apt-get -y -qq install php5 php-pear php5-mysql
 echo "Saving firewall rules"
 iptables-save
 
+# --------------------------------------------------------------------
+#                         Restart services
+# --------------------------------------------------------------------
+system_service stop postfix cyrus-imapd apache2 saslauthd mysql denyhosts
+system_service restart ssh
+system_service start denyhosts mysql saslauthd apache2 cyrus-imapd postfix
+
 echo 
 echo "Your system is ready for use!"
 echo "Please remember you won't be able to login as 'root' use '$SSH_USER' to login via SSH."
 echo
-
-
