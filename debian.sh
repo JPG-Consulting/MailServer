@@ -326,7 +326,7 @@ esac
 # --------------------------------------------------------------------
 
 echo "Installing Cyrus IMAPd"
-package_install cyrus-imapd cyrus-admin cyrus-common libsasl2-modules libsasl2-2 sasl2-bin
+package_install cyrus-imapd cyrus-admin cyrus-common cyrus-clients libsasl2-modules libsasl2-2 sasl2-bin
 
 # Allow IMAP traffic
 iptables -A INPUT -i eth0 -p tcp --dport 143 -m state --state NEW,ESTABLISHED -j ACCEPT
@@ -337,7 +337,7 @@ iptables -A OUTPUT -o eth0 -p tcp --sport 143 -m state --state ESTABLISHED -j AC
 # --------------------------------------------------------------------
 echo "Installing Postfix MTA."
 # Suggests: postfix-mysql postfix-ldap postfix-pcre libsasl2-modules dovecot-common resolvconf postfix-cdb ufw postfix-doc
-package_install postfix postfix-mysql
+package_install postfix postfix-mysql postfix-pcre
 
 # Remove the default sendmail
 package_remove sendmail sendmail-cf sendmail-doc
