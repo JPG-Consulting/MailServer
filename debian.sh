@@ -11,7 +11,7 @@ MAIL_PASSWD=""
 # MySQLVars
 DATABASE_PACKAGE="mysql"
 DATABASE_USER="cpanel"
-DATBASE_PASSWORD="1234"
+DATABASE_PASSWORD="1234"
 DATABASE_DBNAME="cpanel"
 
 # PAM
@@ -225,7 +225,7 @@ iptables -P INPUT DROP
 echo "Configuring SSHd"
 
 if [ ! -f /etc/issue.net ]; then
-	touch /etc/iissue.net
+	touch /etc/issue.net
 fi
 echo "" > /etc/issue.net
 echo "This service is restricted to authorized users only. All activities on this system are logged." >> /etc/issue.net
@@ -298,7 +298,10 @@ case "$DATABASE_PACKAGE" in
 		# PAM
 		# Try MySQL...
 		# If fails try system
-		echo "auth    sufficient                      pam_mysql.so user=$DATABASE_USER passwd=$DATABASE_PASSWORD host=localhost db=$DATABASE_DBNAME table=pam_mail_users usercolumn=email passwdcolumn=password crypt=$PAM_CRYPTO" >> /etc/pam.d/smtp
+		if [ ! -f /etc/pam.d/smtp ]; then
+			touch /etc/pam.d/smtp
+		fi
+		echo "auth    sufficient                      pam_mysql.so user=$DATABASE_USER passwd=$DATABASE_PASSWORD host=127.0.0.1 db=$DATABASE_DBNAME table=pam_mail_users usercolumn=email passwdcolumn=password crypt=$PAM_CRYPTO" > /etc/pam.d/smtp
 		echo "auth    [success=1 default=ignore]      pam_unix.so nullok_secure" >> /etc/pam.d/smtp
 		echo "auth    requisite                       pam_deny.so" >> /etc/pam.d/smtp
 		echo "auth    required                        pam_permit.so" >> /etc/pam.d/smtp
@@ -306,6 +309,22 @@ case "$DATABASE_PACKAGE" in
 		echo "account [success=1 new_authtok_reqd=done default=ignore]        pam_unix.so" >> /etc/pam.d/smtp
 		echo "account requisite                       pam_deny.so" >> /etc/pam.d/smtp
 		echo "account required                        pam_permit.so" >> /etc/pam.d/smtp
+
+		if [ ! -f /etc/pam.d/imap ]; then
+			touch /etc/pam.d/imap
+		fi
+		echo "auth    sufficient                      pam_mysql.so user=$DATABASE_USER passwd=$DATABASE_PASSWORD host=127.0.0.1 db=$DATABASE_DBNAME table=pam_mail_users usercolumn=email passwdcolumn=password crypt=$PAM_CRYPTO" > /etc/pam.d/imap
+		echo "auth    [success=1 default=ignore]      pam_unix.so nullok_secure" >> /etc/pam.d/imap
+		echo "auth    requisite                       pam_deny.so" >> /etc/pam.d/imap
+		echo "auth    required                        pam_permit.so" >> /etc/pam.d/imap
+		echo "account sufficient pam_mysql.so user=$DATABASE_USER passwd=$DATABASE_PASSWORD host=localhost db=$DATABASE_DBNAME table=pam_mail_users usercolumn=email passwdcolumn=password crypt=$PAM_CRYPTO" >> /etc/pam.d/imap
+		echo "account [success=1 new_authtok_reqd=done default=ignore]        pam_unix.so" >> /etc/pam.d/imap
+		echo "account requisite                       pam_deny.so" >> /etc/pam.d/imap
+		echo "account required                        pam_permit.so" >> /etc/pam.d/imap
+
+		# Add -r options to merge user and realm
+		sed -i 's|^OPTIONS="-c -m /var/run/saslauthd"$|OPTIONS="-r -c -m /var/run/saslauthd"|' /etc/default/saslauthd
+
 		;;
 	*)
 		echo "The selected database is not compatibale with this setup script."
@@ -317,13 +336,26 @@ esac
 # --------------------------------------------------------------------
 
 echo "Installing Cyrus IMAPd"
-package_install cyrus-imapd cyrus-admin cyrus-common cyrus-clients libsasl2-modules libsasl2-2 sasl2-bin
-
+package_install libsasl2-2 libsasl2-modules sasl2-bin
+package_install cyrus-imapd cyrus-admin cyrus-common cyrus-clients
+# Fix
 sed -i 's/^proc_path: /#proc_path: /' /etc/imapd.conf
 sed -i 's/^mboxname_lockpath: /#mboxname_lockpath: /' /etc/imapd.conf
+# Normal config
 sed -i 's/^#admins: /admins: /' /etc/imapd.conf
 sed -i 's/^#imap_admins: /imap_admins: /' /etc/imapd.conf
 sed -i 's/unixhierarchysep: no/unixhierarchysep: yes/' /etc/imapd.conf
+sed -i 's/#virtdomains: /virtdomains: /' /etc/imapd.conf
+#sed -i 's/^#defaultdomain:/defaultdomain: $MAIL_DOMAIN/' /etc/imapd.conf
+sed -i 's/^#sasl_mech_list: PLAIN$/sasl_mech_list: PLAIN LOGIN/' /etc/imapd.conf
+sed -i 's/^sasl_pwcheck_method: auxprop/sasl_pwcheck_method: saslauthd/' /etc/imapd.conf
+sed -i 's/^altnamespace: no$/altnamespace: yes/' /etc/imapd.conf
+
+if [ -S /var/run/cyrus/socket/lmtp ]; then
+	dpkg-statoverride --force --update --add cyrus mail 750 /var/run/cyrus/socket
+	chown cyrus:mail /var/run/cyrus/socket
+	chown cyrus:mail /var/run/cyrus/socket/lmtp
+fi
 
 system_service stop cyrus-imapd
 system_service start cyrus-imapd
@@ -332,16 +364,16 @@ system_service restart saslauthd
 echo "cyrus:$CYRUS_PASSWORD" | chpasswd
 echo "$CYRUS_PASSWORD" | saslpasswd2 -p -c cyrus
 
-echo $( cyradm -u cyrus -w "$CYRUS_PASSWORD"  127.0.0.1 << EOF
-cm user.$MAIL_USER@$MAIL_DOMAIN
-setaclmailbox user.$MAIL_USER@$MAIL_DOMAIN $MAIL_USER@$MAIL_DOMAIN lrswipcd
-EOF
-) >> /dev/null 2>&1
+#echo $( cyradm -u cyrus@$MAIL_DOMAIN -w "$CYRUS_PASSWORD"  127.0.0.1 << EOF
+#cm user/$MAIL_USER@$MAIL_DOMAIN
+#setaclmailbox user/$MAIL_USER@MAIL_DOMAIN $MAIL_USER@MAIL_DOMAIN lrswipcd
+#EOF
+#) >> /dev/null 2>&1
 
 
 # Allow IMAP traffic
-iptables -A INPUT -i eth0 -p tcp --dport 143 -m state --state NEW,ESTABLISHED -j ACCEPT
-iptables -A OUTPUT -o eth0 -p tcp --sport 143 -m state --state ESTABLISHED -j ACCEPT
+iptables -A INPUT -p tcp --dport 143 -m state --state NEW,ESTABLISHED -j ACCEPT
+iptables -A OUTPUT -p tcp --sport 143 -m state --state ESTABLISHED -j ACCEPT
 
 # --------------------------------------------------------------------
 #                      Postfix MTA setup
@@ -403,6 +435,26 @@ case "$DATABASE_PACKAGE" in
 		postconf -e "virtual_alias_maps = mysql:/etc/postfix/mysql/alias_maps.cf"
 		postconf -e "virtual_mailbox_base = /var/mail/vhosts"
 		postconf -e "virtual_transport = lmtp:unix:/var/run/cyrus/socket/lmtp"
+		# SASL
+		postconf -e "smtpd_sasl_path = smtpd"
+		postconf -e "pwcheck_method: saslauthd"
+		postconf -e "mech_list: PLAIN LOGIN"
+		postconf -e "smtpd_sasl_auth_enable = yes"
+		postconf -e "broken_sasl_auth_clients = yes"
+		postconf -e "smtpd_sasl_security_options = noanonymous"
+		# Next line is commeted asit is not supported prior to 2.10
+		postconf -e "#smtpd_relay_restrictions = permit_sasl_authenticated reject_unauth_destination"
+		# Previous versions
+		postconf -e "smtpd_recipient_restrictions = permit_sasl_authenticated reject_unauth_destination"
+
+		if [ ! -f /etc/postfix/sasl/smtpd.conf ]; then
+			touch /etc/postfix/sasl/smtpd.conf
+		fi
+		echo "pwcheck_method: saslauthd" > /etc/postfix/sasl/smtpd.conf
+		echo "mech_list: PLAIN LOGIN" >> /etc/postfix/smtpd.conf
+
+
+
 
 		sed -i 's/^lmtp .* lmtp$/lmtp      unix  -       -       n       -       -       lmtp/g' /etc/postfix/master.cf
 		;;
@@ -412,22 +464,25 @@ case "$DATABASE_PACKAGE" in
 esac
 
 # On Debian we need to add 'postfix' user to the 'mail' group
-if [ -S /var/run/cyrus/socket/lmtp ]; then
-	lmtp_group=$( stat -c %G /var/run/cyrus/socket/lmtp )
-	if [ "$lmtp_group" != "root" ]; then
-		if ! groups postfix | grep &>/dev/null '\b$lmtp_group\b'; then
-			adduser postfix "$lmtp_group"
-		fi
-	fi
-	chown cyrus:mail /var/run/cyrus/socket
-	chown cyrus:mail /var/run/cyrus/socket/lmtp
-	lmtp_group=$( stat -c %G /var/run/cyrus/socket/lmtp )
-	if [ "$lmtp_group" != "root" ]; then
-		if ! groups postfix | grep &>/dev/null '\b$lmtp_group\b'; then
-			adduser postfix "$lmtp_group"
-		fi
-	fi
-fi
+adduser postfix mail
+
+cat << EOF > /usr/lib/sasl2/smtpd.conf
+pwcheck_method: auxprop
+auxprop_plugin: sql
+sql_engine: mysql
+mech_list: PLAIN LOGIN
+sql_hostnames: 127.0.0.1
+sql_user: $DATABASE_USER
+sql_passwd: $DATABASE_PASSWORD
+sql_database: $DATABASE_DBNAME
+sql_select: SELECT accounts.password FROM accounts, mail, domain WHERE mail.domain_id=domains.id AND mail.account_id=accounts.id AND mail.mail_name='%u' AND domains.name='%r'
+EOF
+
+chmod a-rwx /usr/lib/sasl2/smtpd.conf
+chown root:mail /usr/lib/sasl2/smtpd.conf
+chmod ug+rw /usr/lib/sasl2/smtpd.conf
+
+cp /usr/lib/sasl2/smtpd.conf /usr/lib/sasl2/imap.conf
 
 
 # Allow Postfix Traffic
@@ -476,9 +531,13 @@ system_service stop postfix cyrus-imapd apache2 saslauthd mysql denyhosts
 system_service restart ssh
 system_service start denyhosts mysql saslauthd apache2 cyrus-imapd postfix
 
+echo $( cyradm -u cyrus -w $CYRUS_PASSWORD  127.0.0.1 << EOF
+cm user/$MAIL_USER@$MAIL_DOMAIN
+EOF
+) >> /dev/null 2>&1
+
+
 echo 
 echo "Your system is ready for use!"
 echo "Please remember you won't be able to login as 'root' use '$SSH_USER' to login via SSH."
 echo
-
-
