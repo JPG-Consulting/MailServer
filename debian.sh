@@ -451,7 +451,7 @@ case "$DATABASE_PACKAGE" in
 			touch /etc/postfix/sasl/smtpd.conf
 		fi
 		echo "pwcheck_method: saslauthd" > /etc/postfix/sasl/smtpd.conf
-		echo "mech_list: PLAIN LOGIN" >> /etc/postfix/smtpd.conf
+		echo "mech_list: PLAIN LOGIN" >> /etc/postfix/sasl/smtpd.conf
 
 
 
