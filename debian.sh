@@ -178,8 +178,10 @@ fi
 read_password MAIL_PASSWD
 
 # ====================================================================
-#                       System security
+#                       Start automation
 # ====================================================================
+echo "Updating package list."
+apt-get -y -qq update
 
 # --------------------------------------------------------------------
 #                          Firewall
@@ -214,22 +216,27 @@ iptables -A OUTPUT -p tcp --sport 22 -m state --state ESTABLISHED,RELATED -j ACC
 iptables -P OUTPUT ACCEPT
 iptables -P INPUT DROP
 # Save rules
-iptables-save
 
-# ====================================================================
-#                       Start automation
-# ====================================================================
-echo "Updating package list."
-apt-get -y -qq update
+package_install iptables-persistent
+if [ ! -f /etc/iptables/rules.v4 ]; then
+	touch /etc/iptables/rules.v4
+fi
+iptables-save > /etc/iptables/rules.v4
 
+if [ ! -f /etc/iptables/rules.v6 ]; then
+	touch /etc/iptables/rules.v6
+fi
+ip6tables-save > /etc/iptables/rules.v6
 
 # --------------------------------------------------------------------
 #                         SSH Settings
 # --------------------------------------------------------------------
 echo "Configuring SSHd"
 
-
-echo "" > etc/issue.net
+if [ ! -f /etc/issue.net ]; then
+	touch /etc/iissue.net
+fi
+echo "" > /etc/issue.net
 echo "This service is restricted to authorized users only. All activities on this system are logged." >> /etc/issue.net
 echo "Unauthorized access will be fully investigated and reported to the appropriate law enforcement agencies." >> /etc/issue.net
 echo "" >> /etc/issue.net
@@ -240,12 +247,12 @@ sed -i 's/^#PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
 sed -i 's/PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
 
 #  Allow Only Specific Users or Groups (AllowUsers AllowGroups)
-if ! grep -i '^AllowUsers ' /etc/ssh/sshd_config; then
+if ! grep -q -i '^AllowUsers ' /etc/ssh/sshd_config; then
 	echo "# AllowUsers controls which users are allowed to log on via ssh" >>  /etc/ssh/sshd_config
 	echo "# Include only accounts that need remote log on privileges!" >> /etc/ssh/sshd_config
 	echo "AllowUsers $SSH_USER" >> /etc/ssh/sshd_config
 fi
-if ! grep -i '^AllowGroups ' /etc/ssh/sshd_config; then
+if ! grep -q -i '^AllowGroups ' /etc/ssh/sshd_config; then
 	echo "# AllowGroups controls which groups are allowed to log on via ssh" >>  /etc/ssh/sshd_config
 	echo "# Include only groups that need remote log on privileges!" >> /etc/ssh/sshd_config
 	echo "AllowGroups sudo" >> /etc/ssh/sshd_config
@@ -264,17 +271,17 @@ case "$DATABASE_PACKAGE" in
 		package_install libpam-mysql
 
 		mysql -uroot -e "CREATE DATABASE IF NOT EXISTS $DATABASE_DBNAME;"
-		mysql -uroot -e "CREATE TABLE IF NOT EXISTS $DATABASE_DBNAME.accounts (id int(10) unsigned NOT NULL AUTO_INCREMENT, type varchar(32) CHARACTER SET ascii NOT NULL DEFAULT 'plain', password text CHARACTER SET ascii COLLATE ascii_bin, PRIMARY KEY (id)) ENGINE=InnoDB  DEFAULT CHARSET=utf8;"
-		mysql -uroot -e "CREATE TABLE IF NOT EXISTS $DATABASE_DBNAME.clients (id int(10) unsigned NOT NULL AUTO_INCREMENT, name varchar(255) NOT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB  DEFAULT CHARSET=utf8;"
-		mysql -uroot -e "CREATE TABLE IF NOT EXISTS $DATABASE_DBNAME.domains (id int(10) unsigned NOT NULL AUTO_INCREMENT, name varchar(255) CHARACTER SET ascii DEFAULT NULL, client_id int(10) unsigned NOT NULL, PRIMARY KEY (id), KEY client_id (client_id), UNIQUE KEY name (name)) ENGINE=InnoDB  DEFAULT CHARSET=utf8;"
-		mysql -uroot -e "CREATE TABLE IF NOT EXISTS $DATABASE_DBNAME.mail (id int(10) unsigned NOT NULL AUTO_INCREMENT, mail_name varchar(245) CHARACTER SET ascii NOT NULL DEFAULT '', account_id int(10) unsigned NOT NULL, domain_id int(10) unsigned NOT NULL, PRIMARY KEY (id), UNIQUE KEY dom_id (domain_id,mail_name), KEY account_id (account_id)) ENGINE=InnoDB  DEFAULT CHARSET=utf8;"
-		mysql -uroot -e "CREATE TABLE IF NOT EXISTS $DATABASE_DBNAME.mail_aliases (id int(10) unsigned NOT NULL AUTO_INCREMENT, mail_id int(10) unsigned NOT NULL, alias varchar(245) character set ascii NOT NULL, PRIMARY KEY  (id), UNIQUE KEY mail_id (mail_id,alias)) ENGINE=InnoDB DEFAULT CHARSET=utf8;"
+		mysql -uroot -e "USE $DATABASE_DBNAME;CREATE TABLE IF NOT EXISTS accounts (id int(10) unsigned NOT NULL AUTO_INCREMENT, type varchar(32) CHARACTER SET ascii NOT NULL DEFAULT 'plain', password text CHARACTER SET ascii COLLATE ascii_bin, PRIMARY KEY (id)) ENGINE=InnoDB  DEFAULT CHARSET=utf8;"
+		mysql -uroot -e "USE $DATABASE_DBNAME;CREATE TABLE IF NOT EXISTS clients (id int(10) unsigned NOT NULL AUTO_INCREMENT, name varchar(255) NOT NULL, PRIMARY KEY (id)) ENGINE=InnoDB  DEFAULT CHARSET=utf8;"
+		mysql -uroot -e "USE $DATABASE_DBNAME;CREATE TABLE IF NOT EXISTS domains (id int(10) unsigned NOT NULL AUTO_INCREMENT, name varchar(255) CHARACTER SET ascii DEFAULT NULL, client_id int(10) unsigned NOT NULL, PRIMARY KEY (id), KEY client_id (client_id), UNIQUE KEY name (name)) ENGINE=InnoDB  DEFAULT CHARSET=utf8;"
+		mysql -uroot -e "USE $DATABASE_DBNAME;CREATE TABLE IF NOT EXISTS mail (id int(10) unsigned NOT NULL AUTO_INCREMENT, mail_name varchar(245) CHARACTER SET ascii NOT NULL DEFAULT '', account_id int(10) unsigned NOT NULL, domain_id int(10) unsigned NOT NULL, PRIMARY KEY (id), UNIQUE KEY dom_id (domain_id,mail_name), KEY account_id (account_id)) ENGINE=InnoDB  DEFAULT CHARSET=utf8;"
+		mysql -uroot -e "USE $DATABASE_DBNAME;CREATE TABLE IF NOT EXISTS mail_aliases (id int(10) unsigned NOT NULL AUTO_INCREMENT, mail_id int(10) unsigned NOT NULL, alias varchar(245) character set ascii NOT NULL, PRIMARY KEY  (id), UNIQUE KEY mail_id (mail_id,alias)) ENGINE=InnoDB DEFAULT CHARSET=utf8;"
 
-		mysql -uroot -e "CREATE VIEW $DATABASE_DBNAME.pam_mail_users AS SELECT CONCAT_WS('@', mail.mail_name, domains.name) AS email, accounts.password AS password FROM accounts, domains, mail WHERE domains.id = mail.domain_id AND mail.account_id = accounts.id;"
+		mysql -uroot -e "USE $DATABASE_DBNAME;CREATE VIEW pam_mail_users AS SELECT CONCAT_WS('@', mail.mail_name, domains.name) AS email, accounts.password AS password FROM accounts, domains, mail WHERE domains.id = mail.domain_id AND mail.account_id = accounts.id;"
 
-		mysql -uroot -e "ALTER TABLE $DATABASE_DBNAME.domains ADD CONSTRAINT domains_ibfk_1 FOREIGN KEY (client_id) REFERENCES $DATABASE_DBNAME.clients (id) ON DELETE CASCADE ON UPDATE CASCADE;"
-		mysql -uroot -e "ALTER TABLE $DATABASE_DBNAME.mail ADD CONSTRAINT mail_ibfk_2 FOREIGN KEY (domain_id) REFERENCES $DATABASE_DBNAME.domains (id) ON DELETE CASCADE ON UPDATE CASCADE, ADD CONSTRAINT mail_ibfk_1 FOREIGN KEY (account_id) REFERENCES $DATABASE_DBNAME.accounts (id) ON DELETE CASCADE ON UPDATE CASCADE;"
-		mysql -uroot -e "ALTER TABLE $DATABASE_DBNAME.mail_aliases ADD CONSTRAINT mail_aliases_ibfk_1 FOREIGN KEY (mail_id) REFERENCES $DATABASE_DBNAME.mail (id) ON DELETE CASCADE ON UPDATE CASCADE;"
+		mysql -uroot -e "USE $DATABASE_DBNAME;ALTER TABLE domains ADD CONSTRAINT domains_ibfk_1 FOREIGN KEY (client_id) REFERENCES clients (id) ON DELETE CASCADE ON UPDATE CASCADE;"
+		mysql -uroot -e "USE $DATABASE_DBNAME;ALTER TABLE mail ADD CONSTRAINT mail_ibfk_2 FOREIGN KEY (domain_id) REFERENCES domains (id) ON DELETE CASCADE ON UPDATE CASCADE, ADD CONSTRAINT mail_ibfk_1 FOREIGN KEY (account_id) REFERENCES $DATABASE_DBNAME.accounts (id) ON DELETE CASCADE ON UPDATE CASCADE;"
+		mysql -uroot -e "USE $DATABASE_DBNAME;ALTER TABLE mail_aliases ADD CONSTRAINT mail_aliases_ibfk_1 FOREIGN KEY (mail_id) REFERENCES mail (id) ON DELETE CASCADE ON UPDATE CASCADE;"
 
 		mysql -uroot -e "CREATE USER '$DATABASE_USER'@'localhost' IDENTIFIED BY '$DATABASE_PASSWORD';"
 		mysql -uroot -e "GRANT SELECT, INSERT, UPDATE, DELETE ON $DATABASE_DBNAME.* TO '$DATABASE_USER'@'localhost';"
@@ -370,7 +377,7 @@ case "$DATABASE_PACKAGE" in
 		postconf -e "virtual_mailbox_maps = mysql:/etc/postfix/mysql/mailbox_maps.cf"
 		postconf -e "virtual_alias_maps = mysql:/etc/postfix/mysql/alias_maps.cf"
 		postconf -e "virtual_mailbox_base = /var/mail/vhosts"
-		postconf -e "virtual_transport = lmtp:unix:/var/lib/imap/socket/lmtp"
+		postconf -e "virtual_transport = cyrus"
 		;;
 	*)
 		echo "The selected database is not compatibale with this setup script."
@@ -417,7 +424,8 @@ package_install php5 php-pear php5-mysql
 #                          Final setup
 # --------------------------------------------------------------------
 echo "Saving firewall rules"
-iptables-save
+iptables-save > /etc/iptables/rules.v4
+ip6tables-save > /etc/iptables/rules.v6
 
 # --------------------------------------------------------------------
 #                         Restart services
