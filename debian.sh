@@ -17,6 +17,8 @@ DATABASE_DBNAME="cpanel"
 # PAM
 PAM_MYSQL_CRYPTO=0
 
+CYRUS_PASSWORD="1234"
+
 # ====================================================================
 #                            Functions
 # ====================================================================
@@ -182,6 +184,7 @@ read_password MAIL_PASSWD
 # ====================================================================
 echo "Updating package list."
 apt-get -y -qq update
+#apt-get -y -qq upgrade
 
 # --------------------------------------------------------------------
 #                          Firewall
@@ -215,18 +218,6 @@ iptables -A OUTPUT -p tcp --sport 22 -m state --state ESTABLISHED,RELATED -j ACC
 # Default rules
 iptables -P OUTPUT ACCEPT
 iptables -P INPUT DROP
-# Save rules
-
-package_install iptables-persistent
-if [ ! -f /etc/iptables/rules.v4 ]; then
-	touch /etc/iptables/rules.v4
-fi
-iptables-save > /etc/iptables/rules.v4
-
-if [ ! -f /etc/iptables/rules.v6 ]; then
-	touch /etc/iptables/rules.v6
-fi
-ip6tables-save > /etc/iptables/rules.v6
 
 # --------------------------------------------------------------------
 #                         SSH Settings
@@ -328,6 +319,26 @@ esac
 echo "Installing Cyrus IMAPd"
 package_install cyrus-imapd cyrus-admin cyrus-common cyrus-clients libsasl2-modules libsasl2-2 sasl2-bin
 
+sed -i 's/^proc_path: /#proc_path: /' /etc/imapd.conf
+sed -i 's/^mboxname_lockpath: /#mboxname_lockpath: /' /etc/imapd.conf
+sed -i 's/^#admins: /admins: /' /etc/imapd.conf
+sed -i 's/^#imap_admins: /imap_admins: /' /etc/imapd.conf
+sed -i 's/unixhierarchysep: no/unixhierarchysep: yes/' /etc/imapd.conf
+
+system_service stop cyrus-imapd
+system_service start cyrus-imapd
+system_service restart saslauthd
+
+echo "cyrus:$CYRUS_PASSWORD" | chpasswd
+echo "$CYRUS_PASSWORD" | saslpasswd2 -p -c cyrus
+
+echo $( cyradm -u cyrus -w "$CYRUS_PASSWORD"  127.0.0.1 << EOF
+cm user.$MAIL_USER@$MAIL_DOMAIN
+setaclmailbox user.$MAIL_USER@$MAIL_DOMAIN $MAIL_USER@$MAIL_DOMAIN lrswipcd
+EOF
+) >> /dev/null 2>&1
+
+
 # Allow IMAP traffic
 iptables -A INPUT -i eth0 -p tcp --dport 143 -m state --state NEW,ESTABLISHED -j ACCEPT
 iptables -A OUTPUT -o eth0 -p tcp --sport 143 -m state --state ESTABLISHED -j ACCEPT
@@ -340,8 +351,11 @@ echo "Installing Postfix MTA."
 package_install postfix postfix-mysql postfix-pcre
 
 # Remove the default sendmail
-package_remove sendmail sendmail-cf sendmail-doc
+system_service stop sendmail
+package_remove sendmail 
+package_remove sendmail-cf sendmail-doc
 package_remove sendmail-base
+system_service restart postfix
 
 case "$DATABASE_PACKAGE" in
 	mysql)
@@ -405,6 +419,14 @@ if [ -S /var/run/cyrus/socket/lmtp ]; then
 			adduser postfix "$lmtp_group"
 		fi
 	fi
+	chown cyrus:mail /var/run/cyrus/socket
+	chown cyrus:mail /var/run/cyrus/socket/lmtp
+	lmtp_group=$( stat -c %G /var/run/cyrus/socket/lmtp )
+	if [ "$lmtp_group" != "root" ]; then
+		if ! groups postfix | grep &>/dev/null '\b$lmtp_group\b'; then
+			adduser postfix "$lmtp_group"
+		fi
+	fi
 fi
 
 
@@ -436,7 +458,15 @@ package_install php5 php-pear php5-mysql
 #                          Final setup
 # --------------------------------------------------------------------
 echo "Saving firewall rules"
+package_install iptables-persistent
+if [ ! -f /etc/iptables/rules.v4 ]; then
+	touch /etc/iptables/rules.v4
+fi
 iptables-save > /etc/iptables/rules.v4
+
+if [ ! -f /etc/iptables/rules.v6 ]; then
+	touch /etc/iptables/rules.v6
+fi
 ip6tables-save > /etc/iptables/rules.v6
 
 # --------------------------------------------------------------------
