@@ -322,6 +322,17 @@ case "$DATABASE_PACKAGE" in
 esac
 
 # --------------------------------------------------------------------
+#                       IMAP setup
+# --------------------------------------------------------------------
+
+echo "Installing Cyrus IMAPd"
+package_install cyrus-imapd cyrus-admin cyrus-common libsasl2-modules libsasl2-2 sasl2-bin
+
+# Allow IMAP traffic
+iptables -A INPUT -i eth0 -p tcp --dport 143 -m state --state NEW,ESTABLISHED -j ACCEPT
+iptables -A OUTPUT -o eth0 -p tcp --sport 143 -m state --state ESTABLISHED -j ACCEPT
+
+# --------------------------------------------------------------------
 #                      Postfix MTA setup
 # --------------------------------------------------------------------
 echo "Installing Postfix MTA."
@@ -377,28 +388,29 @@ case "$DATABASE_PACKAGE" in
 		postconf -e "virtual_mailbox_maps = mysql:/etc/postfix/mysql/mailbox_maps.cf"
 		postconf -e "virtual_alias_maps = mysql:/etc/postfix/mysql/alias_maps.cf"
 		postconf -e "virtual_mailbox_base = /var/mail/vhosts"
-		postconf -e "virtual_transport = cyrus"
+		postconf -e "virtual_transport = lmtp:unix:/var/run/cyrus/socket/lmtp"
+
+		sed -i 's/^lmtp .* lmtp$/lmtp      unix  -       -       n       -       -       lmtp/g' /etc/postfix/master.cf
 		;;
 	*)
 		echo "The selected database is not compatibale with this setup script."
 		exit 1
 esac
 
+# On Debian we need to add 'postfix' user to the 'mail' group
+if [ -S /var/run/cyrus/socket/lmtp ]; then
+	lmtp_group=$( stat -c %G /var/run/cyrus/socket/lmtp )
+	if [ "$lmtp_group" != "root" ]; then
+		if ! groups postfix | grep &>/dev/null '\b$lmtp_group\b'; then
+			adduser postfix "$lmtp_group"
+		fi
+	fi
+fi
+
+
 # Allow Postfix Traffic
 iptables -A INPUT -p tcp --dport 25 -m state --state NEW,ESTABLISHED -j ACCEPT
 iptables -A OUTPUT -p tcp --sport 25 -m state --state ESTABLISHED -j ACCEPT
-
-# --------------------------------------------------------------------
-#                       IMAP setup
-# --------------------------------------------------------------------
-
-echo "Installing Cyrus IMAPd"
-package_install cyrus-imapd cyrus-admin cyrus-common libsasl2-modules libsasl2-2 sasl2-bin
-
-# Allow IMAP traffic
-iptables -A INPUT -i eth0 -p tcp --dport 143 -m state --state NEW,ESTABLISHED -j ACCEPT
-iptables -A OUTPUT -o eth0 -p tcp --sport 143 -m state --state ESTABLISHED -j ACCEPT
-
 
 # --------------------------------------------------------------------
 #                          HTTP setup
@@ -438,3 +450,5 @@ echo
 echo "Your system is ready for use!"
 echo "Please remember you won't be able to login as 'root' use '$SSH_USER' to login via SSH."
 echo
+
+
