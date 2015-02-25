@@ -295,33 +295,8 @@ case "$DATABASE_PACKAGE" in
 		mysql -uroot -e "INSERT INTO $DATABASE_DBNAME.domains (name, client_id) VALUES ('$MAIL_DOMAIN', 1);"
 		mysql -uroot -e "INSERT INTO $DATABASE_DBNAME.mail (mail_name, account_id, domain_id) VALUES ('$MAIL_USER', 1, 1);"
 
-		# PAM
-		# Try MySQL...
-		# If fails try system
-		if [ ! -f /etc/pam.d/smtp ]; then
-			touch /etc/pam.d/smtp
-		fi
-		echo "auth    sufficient                      pam_mysql.so user=$DATABASE_USER passwd=$DATABASE_PASSWORD host=127.0.0.1 db=$DATABASE_DBNAME table=pam_mail_users usercolumn=email passwdcolumn=password crypt=$PAM_CRYPTO" > /etc/pam.d/smtp
-		echo "auth    [success=1 default=ignore]      pam_unix.so nullok_secure" >> /etc/pam.d/smtp
-		echo "auth    requisite                       pam_deny.so" >> /etc/pam.d/smtp
-		echo "auth    required                        pam_permit.so" >> /etc/pam.d/smtp
-		echo "account sufficient pam_mysql.so user=$DATABASE_USER passwd=$DATABASE_PASSWORD host=localhost db=$DATABASE_DBNAME table=pam_mail_users usercolumn=email passwdcolumn=password crypt=$PAM_CRYPTO" >> /etc/pam.d/smtp
-		echo "account [success=1 new_authtok_reqd=done default=ignore]        pam_unix.so" >> /etc/pam.d/smtp
-		echo "account requisite                       pam_deny.so" >> /etc/pam.d/smtp
-		echo "account required                        pam_permit.so" >> /etc/pam.d/smtp
-
-		if [ ! -f /etc/pam.d/imap ]; then
-			touch /etc/pam.d/imap
-		fi
-		echo "auth    sufficient                      pam_mysql.so user=$DATABASE_USER passwd=$DATABASE_PASSWORD host=127.0.0.1 db=$DATABASE_DBNAME table=pam_mail_users usercolumn=email passwdcolumn=password crypt=$PAM_CRYPTO" > /etc/pam.d/imap
-		echo "auth    [success=1 default=ignore]      pam_unix.so nullok_secure" >> /etc/pam.d/imap
-		echo "auth    requisite                       pam_deny.so" >> /etc/pam.d/imap
-		echo "auth    required                        pam_permit.so" >> /etc/pam.d/imap
-		echo "account sufficient pam_mysql.so user=$DATABASE_USER passwd=$DATABASE_PASSWORD host=localhost db=$DATABASE_DBNAME table=pam_mail_users usercolumn=email passwdcolumn=password crypt=$PAM_CRYPTO" >> /etc/pam.d/imap
-		echo "account [success=1 new_authtok_reqd=done default=ignore]        pam_unix.so" >> /etc/pam.d/imap
-		echo "account requisite                       pam_deny.so" >> /etc/pam.d/imap
-		echo "account required                        pam_permit.so" >> /etc/pam.d/imap
-
+		# NOTE: PAM Modules get overriden by the setup script so we'll take care of them later on
+		
 		# Add -r options to merge user and realm
 		sed -i 's|^OPTIONS="-c -m /var/run/saslauthd"$|OPTIONS="-r -c -m /var/run/saslauthd"|' /etc/default/saslauthd
 
