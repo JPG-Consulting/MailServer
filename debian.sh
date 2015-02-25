@@ -465,16 +465,20 @@ esac
 adduser postfix mail
 adduser postfix sasl
 
+#cat << EOF > /usr/lib/sasl2/smtpd.conf
+#pwcheck_method: auxprop
+#auxprop_plugin: sql
+#sql_engine: mysql
+#mech_list: PLAIN LOGIN
+#sql_hostnames: 127.0.0.1
+#sql_user: $DATABASE_USER
+#sql_passwd: $DATABASE_PASSWORD
+#sql_database: $DATABASE_DBNAME
+#sql_select: SELECT accounts.password FROM accounts, mail, domain WHERE mail.domain_id=domains.id AND mail.account_id=accounts.id AND mail.mail_name='%u' AND domains.name='%r'
+#EOF
 cat << EOF > /usr/lib/sasl2/smtpd.conf
-pwcheck_method: auxprop
-auxprop_plugin: sql
-sql_engine: mysql
+pwcheck_method: saslauthd
 mech_list: PLAIN LOGIN
-sql_hostnames: 127.0.0.1
-sql_user: $DATABASE_USER
-sql_passwd: $DATABASE_PASSWORD
-sql_database: $DATABASE_DBNAME
-sql_select: SELECT accounts.password FROM accounts, mail, domain WHERE mail.domain_id=domains.id AND mail.account_id=accounts.id AND mail.mail_name='%u' AND domains.name='%r'
 EOF
 
 chmod a-rwx /usr/lib/sasl2/smtpd.conf
@@ -507,6 +511,44 @@ iptables -A OUTPUT -p tcp --sport 443 -m state --state ESTABLISHED -j ACCEPT
 
 echo "Installing PHP"
 package_install php5 php-pear php5-mysql
+
+# --------------------------------------------------------------------
+#                           PAM Modules
+# --------------------------------------------------------------------
+case "$DATABASE_PACKAGE" in
+	mysql)
+		if [ ! -f /etc/pam.d/smtp ]; then
+			touch /etc/pam.d/smtp
+		fi
+		echo "auth    sufficient                      pam_mysql.so user=$DATABASE_USER passwd=$DATABASE_PASSWORD host=127.0.0.1 db=$DATABASE_DBNAME table=pam_mail_users usercolumn=email passwdcolumn=password crypt=$PAM_CRYPTO" > /etc/pam.d/smtp
+		echo "auth    [success=1 default=ignore]      pam_unix.so nullok_secure" >> /etc/pam.d/smtp
+		echo "auth    requisite                       pam_deny.so" >> /etc/pam.d/smtp
+		echo "auth    required                        pam_permit.so" >> /etc/pam.d/smtp
+		echo "account sufficient pam_mysql.so user=$DATABASE_USER passwd=$DATABASE_PASSWORD host=localhost db=$DATABASE_DBNAME table=pam_mail_users usercolumn=email passwdcolumn=password crypt=$PAM_CRYPTO" >> /etc/pam.d/smtp
+		echo "account [success=1 new_authtok_reqd=done default=ignore]        pam_unix.so" >> /etc/pam.d/smtp
+		echo "account requisite                       pam_deny.so" >> /etc/pam.d/smtp
+		echo "account required                        pam_permit.so" >> /etc/pam.d/smtp
+
+		if [ ! -f /etc/pam.d/imap ]; then
+			touch /etc/pam.d/imap
+		fi
+		echo "auth    sufficient                      pam_mysql.so user=$DATABASE_USER passwd=$DATABASE_PASSWORD host=127.0.0.1 db=$DATABASE_DBNAME table=pam_mail_users usercolumn=email passwdcolumn=password crypt=$PAM_CRYPTO" > /etc/pam.d/imap
+		echo "auth    [success=1 default=ignore]      pam_unix.so nullok_secure" >> /etc/pam.d/imap
+		echo "auth    requisite                       pam_deny.so" >> /etc/pam.d/imap
+		echo "auth    required                        pam_permit.so" >> /etc/pam.d/imap
+		echo "account sufficient pam_mysql.so user=$DATABASE_USER passwd=$DATABASE_PASSWORD host=localhost db=$DATABASE_DBNAME table=pam_mail_users usercolumn=email passwdcolumn=password crypt=$PAM_CRYPTO" >> /etc/pam.d/imap
+		echo "account [success=1 new_authtok_reqd=done default=ignore]        pam_unix.so" >> /etc/pam.d/imap
+		echo "account requisite                       pam_deny.so" >> /etc/pam.d/imap
+		echo "account required                        pam_permit.so" >> /etc/pam.d/imap
+
+		# Add -r options to merge user and realm
+		sed -i 's|^OPTIONS="-c -m /var/run/saslauthd"$|OPTIONS="-r -c -m /var/run/saslauthd"|' /etc/default/saslauthd
+
+		;;
+	*)
+		echo "The selected database is not compatibale with this setup script."
+		exit 1
+esac
 
 # --------------------------------------------------------------------
 #                          Final setup
