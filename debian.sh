@@ -463,6 +463,7 @@ esac
 
 # On Debian we need to add 'postfix' user to the 'mail' group
 adduser postfix mail
+adduser postfix sasl
 
 cat << EOF > /usr/lib/sasl2/smtpd.conf
 pwcheck_method: auxprop
