@@ -455,7 +455,7 @@ case "$DATABASE_PACKAGE" in
 
 
 
-
+		sed -i 's/^smtp      inet  n       -       -       -       -       smtpd$/smtp      inet  n       -       n       -       -       smtpd/g' /etc/postfix/master.cf
 		sed -i 's/^lmtp .* lmtp$/lmtp      unix  -       -       n       -       -       lmtp/g' /etc/postfix/master.cf
 		;;
 	*)
