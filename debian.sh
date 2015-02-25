@@ -437,8 +437,6 @@ case "$DATABASE_PACKAGE" in
 		postconf -e "virtual_transport = lmtp:unix:/var/run/cyrus/socket/lmtp"
 		# SASL
 		postconf -e "smtpd_sasl_path = smtpd"
-		postconf -e "pwcheck_method: saslauthd"
-		postconf -e "mech_list: PLAIN LOGIN"
 		postconf -e "smtpd_sasl_auth_enable = yes"
 		postconf -e "broken_sasl_auth_clients = yes"
 		postconf -e "smtpd_sasl_security_options = noanonymous"
