@@ -1,5 +1,27 @@
 #!/bin/bash
 
+function generate_password() {
+	local __passwd=""
+
+	if hash makepasswd 2>/dev/null; then
+		__passwd=$( makepasswd --minchars=12 --maxchars=14 )
+	else
+		__passwd=$( tr -dc A-Za-z0-9 < /dev/urandom | head -c 12 | xargs )
+	fi
+	
+	echo "$__passwd"
+}
+
+function package_is_installed() {
+	local __var=""
+	for __var in "$@"; do
+		if ! dpkg -s $__var > /dev/null 2>&1; then
+			return 1
+		fi
+	done
+	return 0
+}
+
 function prompt_yesno() {
 	local __default_yn="";
 	if [[ $1 =~ .*\[Y/n\].* ]]; then
@@ -27,6 +49,54 @@ function prompt_yesno() {
 		fi
 		read -s -r -n 1
 	done
+}
+
+function read_password() {
+	local __resultvar=$1
+	local __passwd=""
+	local __passwd_vrfy=""
+
+	if [ "$#" -ne 1 ]; then
+    	echo "Error: read_password: Illegal number of parameters"
+		exit 1
+	fi
+
+	while true; do
+		read -s -p "Enter new password: " __passwd
+		echo
+		read -s -p "Retype new password: " __passwd_vrfy
+		echo
+		if [ "$__passwd" = "$__passwd_vrfy" ]; then
+			__passwd="$(echo -e "${__passwd}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+			if [ -n "$__passwd" ]; then
+ 				break
+			else
+				echo "No password supplied"
+			fi
+		else
+			echo "Sorry, passwords do not match"
+		fi
+	done
+	
+	eval $__resultvar="'$__passwd'"
+}
+
+set_imapd_conf() {
+	local __key=""
+	local __value=""
+
+	IFS=':' read -r __key __value <<< "$1"
+	__value=$(echo -e "${__value}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+	if ! grep -qi "^$__key: " /etc/imapd.conf; then
+		if grep -qi "^#$__key:" /etc/imapd.conf; then
+			sed -i "s/^#$__key:.*$/$__key: $__value/" /etc/imapd.conf
+		else
+			echo "$__key: $__value" >> /etc/imapd.conf
+		fi
+	else
+		sed -i "s/^$__key:.*$/$__key: $__value/" /etc/imapd.conf
+	fi
 }
 
 
@@ -76,7 +146,7 @@ if ! command -v wget >/dev/null 2>&1; then
 fi
 
 # Check OpenSSH
-if ! dpkg -l openssh-server > /dev/null 2>&1; then
+if ! package_is_installed openssh-server; then
 	if prompt_yesno "Do you wish to install OpenSSH [Y/n]? "; then
 		echo "Installing OpenSSH"
 		if ! apt-get -y -qq install openssh-server; then
@@ -86,25 +156,21 @@ if ! dpkg -l openssh-server > /dev/null 2>&1; then
 	fi
 fi
 
-if dpkg -l openssh-server > /dev/null 2>&1; then
+if package_is_installed openssh-server; then
 	# Ugly nested ifs. Better way?
-	if ! dpkg -l denyhosts > /dev/null 2>&1; then
-		if ! dpkg -l fail2ban > /dev/null 2>&1; then
+	if ! package_is_installed denyhosts; then
+		if ! package_is_installed fail2ban; then
 
 			if prompt_yesno "Do you wish to install denyhosts [Y/n]? "; then
-				if ! dpkg -l denyhosts > /dev/null 2>&1; then
-					if ! apt-get -y -qq install denyhosts; then
-						echo "Error: couldn't install denyhosts"
-						exit 1
-					fi
+				if ! apt-get -y -qq install denyhosts; then
+					echo "Error: couldn't install denyhosts"
+					exit 1
 				fi
 			else
 				if prompt_yesno "Do you wish to install fail2ban [Y/n]? "; then
-					if ! dpkg -l fail2ban > /dev/null 2>&1; then
-						if ! apt-get -y -qq install fail2ban; then
-							echo "Error: couldn't install fail2ban"
-							exit 1
-						fi
+					if ! apt-get -y -qq install fail2ban; then
+						echo "Error: couldn't install fail2ban"
+						exit 1
 					fi
 				fi
 			fi
@@ -113,8 +179,8 @@ if dpkg -l openssh-server > /dev/null 2>&1; then
 fi
 
 # Database
-if ! dpkg -l mariadb-server > /dev/null 2>&1; then
-	if ! dpkg -l mysql-server > /dev/null 2>&1; then
+if ! package_is_installed mariadb-server; then
+	if ! package_is_installed mysql-server; then
 		echo "Installing MySQL server"
 		if ! DEBIAN_FRONTEND=noninteractive apt-get -y -qq install mysql-server; then
 			echo "Error: couldn't install mysql-server"
@@ -122,7 +188,7 @@ if ! dpkg -l mariadb-server > /dev/null 2>&1; then
 		fi
 	fi
 
-	if ! dpkg -l mysql-client > /dev/null 2>&1; then
+	if ! package_is_installed mysql-client; then
 		if ! apt-get -y -qq install mysql-client; then
 			echo "Error: couldn't install mysql-client"
 			exit 1
@@ -131,7 +197,7 @@ if ! dpkg -l mariadb-server > /dev/null 2>&1; then
 
 fi
 
-if ! dpkg -l libpam-mysql > /dev/null 2>&1; then
+if ! package_is_installed libpam-mysql; then
 	if ! apt-get -y -qq install libpam-mysql; then
 		echo "Error: couldn't install libpam-mysql"
 		exit 1
@@ -139,14 +205,14 @@ if ! dpkg -l libpam-mysql > /dev/null 2>&1; then
 fi
 
 # SASL
-if ! dpkg -l sasl2-bin > /dev/null 2>&1; then
+if ! package_is_installed sasl2-bin; then
 	if ! apt-get -y -qq install sasl2-bin; then
 		echo "Error: couldn't install sasl2-bin"
 		exit 1
 	fi
 fi
 
-if ! dpkg -l libsasl2-modules > /dev/null 2>&1; then
+if ! package_is_installed libsasl2-modules; then
 	if ! apt-get -y -qq install libsasl2-modules; then
 		echo "Error: couldn't install libsasl2-modules"
 		exit 1
@@ -154,14 +220,14 @@ if ! dpkg -l libsasl2-modules > /dev/null 2>&1; then
 fi
 
 # Postfix
-if ! dpkg -l postfix > /dev/null 2>&1; then
+if ! package_is_installed postfix; then
 	echo "Installing postfix MTA"
 	if ! DEBIAN_FRONTEND=noninteractive apt-get -y -qq install postfix; then
 		echo "Error: couldn't install postfix"
 		exit 1
 	fi
 
-	if ! dpkg -l postfix-mysql > /dev/null 2>&1; then
+	if ! package_is_installed postfix-mysql; then
 		if ! apt-get -y -qq install postfix-mysql; then
 			echo "Error: couldn't install postfix-mysql"
 			exit 1
@@ -170,7 +236,7 @@ if ! dpkg -l postfix > /dev/null 2>&1; then
 fi
 
 # Cyrus
-if ! dpkg -l cyrus-imapd > /dev/null 2>&1; then
+if ! package_is_installed cyrus-imapd; then
 	echo "Installing Cyrus IMAP server"
 	if ! DEBIAN_FRONTEND=noninteractive apt-get -y -qq install cyrus-imapd; then
 		echo "Error: couldn't install cyrus-imapd"
@@ -178,14 +244,14 @@ if ! dpkg -l cyrus-imapd > /dev/null 2>&1; then
 	fi
 fi
 
-if ! dpkg -l cyrus-admin > /dev/null 2>&1; then
+if ! package_is_installed cyrus-admin; then
 	if ! apt-get -y -qq install cyrus-admin; then
 		echo "Error: couldn't install cyrus-admin"
 		exit 1
 	fi
 fi
 
-if ! dpkg -l cyrus-pop3d > /dev/null 2>&1; then
+if ! package_is_installed cyrus-pop3d; then
 	if prompt_yesno "Do you wish to install Pop3 support [y/N]? "; then
 		if ! apt-get -y -qq install cyrus-pop3d; then
 			echo "Error: couldn't install cyrus-pop3d"
@@ -195,7 +261,7 @@ if ! dpkg -l cyrus-pop3d > /dev/null 2>&1; then
 fi
 
 # PHP 5
-if ! dpkg -l apache2 > /dev/null 2>&1; then
+if ! package_is_installed php5; then
 	echo "Installing PHP5"
 	if ! apt-get -y -qq install php5; then
 		echo "Error: couldn't install php5"
@@ -207,7 +273,7 @@ fi
 apt-get -y -qq install php5-mysql php5-curl php5-gd php5-intl php-pear php5-imagick php5-imap php5-mcrypt php5-memcache php5-ming php5-ps php5-pspell php5-recode php5-snmp php5-sqlite php5-tidy php5-xmlrpc php5-xsl
 
 # Apache
-if ! dpkg -l apache2 > /dev/null 2>&1; then
+if ! package_is_installed apache2; then
 	echo "Installing Apache2 HTTP server"
 	if ! DEBIAN_FRONTEND=noninteractive apt-get -y -qq install apache2; then
 		echo "Error: couldn't install apache2"
@@ -215,8 +281,8 @@ if ! dpkg -l apache2 > /dev/null 2>&1; then
 	fi
 fi
 
-if ! dpkg -l libapache2-mod-php5 > /dev/null 2>&1; then
-	if ! apt-get -y -qq install php5 libapache2-mod-php5; then
+if ! package_is_installed libapache2-mod-php5 > /dev/null 2>&1; then
+	if ! apt-get -y -qq install libapache2-mod-php5; then
 		echo "Error: couldn't install libapache2-mod-php5"
 		exit 1
 	fi
@@ -224,7 +290,7 @@ fi
 
 # Roundcube
 if prompt_yesno "Do you wish to install webmail support [y/N]? "; then
-	if ! dpkg -l roundcube > /dev/null 2>&1; then
+	if ! package_is_installed roundcube; then
 		echo "Installing Roundcube webmail"
 		if ! apt-get -y -qq install roundcube; then
 			echo "Error: couldn't install roundcube"
@@ -232,7 +298,7 @@ if prompt_yesno "Do you wish to install webmail support [y/N]? "; then
 		fi
 	fi
 
-	if ! dpkg -l roundcube-mysql > /dev/null 2>&1; then
+	if ! package_is_installed roundcube-mysql; then
 		if ! apt-get -y -qq install roundcube-mysql; then
 			echo "Error: couldn't install roundcube-mysql"
 			exit 1
@@ -250,4 +316,189 @@ apt-get -y -qq clean
 #
 # ====================================================================
 
+# --------------------------------------------------------------------
+#                              Database
+# --------------------------------------------------------------------
+DATABASE_USER="cpadmin"
+DATABASE_PASSWORD="1234"
+DATABASE_DBNAME="cpanel"
 
+# Create default tables
+mysql -uroot -e "CREATE DATABASE IF NOT EXISTS $DATABASE_DBNAME;"
+mysql -uroot -e "USE $DATABASE_DBNAME;CREATE TABLE IF NOT EXISTS accounts (id int(10) unsigned NOT NULL AUTO_INCREMENT, type varchar(32) CHARACTER SET ascii NOT NULL DEFAULT 'plain', password text CHARACTER SET ascii COLLATE ascii_bin, PRIMARY KEY (id)) ENGINE=InnoDB  DEFAULT CHARSET=utf8;"
+mysql -uroot -e "USE $DATABASE_DBNAME;CREATE TABLE IF NOT EXISTS clients (id int(10) unsigned NOT NULL AUTO_INCREMENT, name varchar(255) NOT NULL, PRIMARY KEY (id)) ENGINE=InnoDB  DEFAULT CHARSET=utf8;"
+mysql -uroot -e "USE $DATABASE_DBNAME;CREATE TABLE IF NOT EXISTS domains (id int(10) unsigned NOT NULL AUTO_INCREMENT, name varchar(255) CHARACTER SET ascii DEFAULT NULL, client_id int(10) unsigned NOT NULL, PRIMARY KEY (id), KEY client_id (client_id), UNIQUE KEY name (name)) ENGINE=InnoDB  DEFAULT CHARSET=utf8;"
+mysql -uroot -e "USE $DATABASE_DBNAME;CREATE TABLE IF NOT EXISTS mail (id int(10) unsigned NOT NULL AUTO_INCREMENT, mail_name varchar(245) CHARACTER SET ascii NOT NULL DEFAULT '', account_id int(10) unsigned NOT NULL, domain_id int(10) unsigned NOT NULL, PRIMARY KEY (id), UNIQUE KEY dom_id (domain_id,mail_name), KEY account_id (account_id)) ENGINE=InnoDB  DEFAULT CHARSET=utf8;"
+mysql -uroot -e "USE $DATABASE_DBNAME;CREATE TABLE IF NOT EXISTS mail_aliases (id int(10) unsigned NOT NULL AUTO_INCREMENT, mail_id int(10) unsigned NOT NULL, alias varchar(245) character set ascii NOT NULL, PRIMARY KEY  (id), UNIQUE KEY mail_id (mail_id,alias)) ENGINE=InnoDB DEFAULT CHARSET=utf8;"
+
+mysql -uroot -e "USE $DATABASE_DBNAME;CREATE VIEW pam_mail_users AS SELECT CONCAT_WS('@', mail.mail_name, domains.name) AS email, accounts.password AS password FROM accounts, domains, mail WHERE domains.id = mail.domain_id AND mail.account_id = accounts.id;"
+
+mysql -uroot -e "USE $DATABASE_DBNAME;ALTER TABLE domains ADD CONSTRAINT domains_ibfk_1 FOREIGN KEY (client_id) REFERENCES clients (id) ON DELETE CASCADE ON UPDATE CASCADE;"
+mysql -uroot -e "USE $DATABASE_DBNAME;ALTER TABLE mail ADD CONSTRAINT mail_ibfk_2 FOREIGN KEY (domain_id) REFERENCES domains (id) ON DELETE CASCADE ON UPDATE CASCADE, ADD CONSTRAINT mail_ibfk_1 FOREIGN KEY (account_id) REFERENCES $DATABASE_DBNAME.accounts (id) ON DELETE CASCADE ON UPDATE CASCADE;"
+mysql -uroot -e "USE $DATABASE_DBNAME;ALTER TABLE mail_aliases ADD CONSTRAINT mail_aliases_ibfk_1 FOREIGN KEY (mail_id) REFERENCES mail (id) ON DELETE CASCADE ON UPDATE CASCADE;"
+
+mysql -uroot -e "CREATE USER '$DATABASE_USER'@'localhost' IDENTIFIED BY '$DATABASE_PASSWORD';"
+mysql -uroot -e "GRANT SELECT, INSERT, UPDATE, DELETE ON $DATABASE_DBNAME.* TO '$DATABASE_USER'@'localhost';"
+mysql -uroot -e "FLUSH PRIVILEGES;"
+
+# Initial client
+VIRTUAL_COMPANY_NAME="My Company"
+VIRTUAL_DOMAIN_NAME="$( hostname -f )"
+
+mysql -uroot -e "INSERT INTO $DATABASE_DBNAME.clients (name) VALUES ('$VIRTUAL_COMPANY_NAME');"
+mysql -uroot -e "INSERT INTO $DATABASE_DBNAME.domains (name, client_id) VALUES ('$VIRTUAL_DOMAIN_NAME', 1);"
+
+if prompt_yesno "Create an email account [Y/n]? "; then
+	VIRTUAL_EMAIL_USER="info"
+	VIRTUAL_EMAIL_PASSWORD=""
+
+	read -p "Email username [$VIRTUAL_EMAIL_USER]: " input_var
+	if [ -n "$input_var" ]; then
+		VIRTUAL_EMAIL_USER="$input_var"
+	fi
+
+	read_password VIRTUAL_EMAIL_PASSWORD
+
+	mysql -uroot -e "INSERT INTO $DATABASE_DBNAME.accounts (type, password) VALUES ('crypt', '$( mkpasswd $VIRTUAL_EMAIL_PASSWD )');"
+	mysql -uroot -e "INSERT INTO $DATABASE_DBNAME.mail (mail_name, account_id, domain_id) VALUES ('$VIRTUAL_EMAIL_USER', 1, 1);"
+fi
+
+# --------------------------------------------------------------------
+#                                SASL
+# --------------------------------------------------------------------
+if package_is_installed sasl2-bin; then
+	# Add -r options to merge user and realm
+	sed -i 's|^OPTIONS="-c -m /var/run/saslauthd"$|OPTIONS="-r -c -m /var/run/saslauthd"|' /etc/default/saslauthd
+
+	# restart service
+	/etc/init.d/saslauthd restart
+fi
+
+# --------------------------------------------------------------------
+#                            Postfix MTA
+# --------------------------------------------------------------------
+
+if package_is_installed postfix; then
+	# On Debian we need to add 'postfix' user to the 'mail' group
+	adduser postfix mail
+	adduser postfix sasl
+
+
+	
+	# PAM settings for smtpd
+	if package_is_installed libpam-mysql; then
+		if [ ! -f /etc/pam.d/smtp ]; then
+			touch /etc/pam.d/smtp
+		fi
+		echo "auth    sufficient                      pam_mysql.so user=$DATABASE_USER passwd=$DATABASE_PASSWORD host=127.0.0.1 db=$DATABASE_DBNAME table=pam_mail_users usercolumn=email passwdcolumn=password crypt=1" > /etc/pam.d/smtp
+		echo "auth    [success=1 default=ignore]      pam_unix.so nullok_secure" >> /etc/pam.d/smtp
+		echo "auth    requisite                       pam_deny.so" >> /etc/pam.d/smtp
+		echo "auth    required                        pam_permit.so" >> /etc/pam.d/smtp
+		echo "account sufficient pam_mysql.so user=$DATABASE_USER passwd=$DATABASE_PASSWORD host=localhost db=$DATABASE_DBNAME table=pam_mail_users usercolumn=email passwdcolumn=password crypt=1" >> /etc/pam.d/smtp
+		echo "account [success=1 new_authtok_reqd=done default=ignore]        pam_unix.so" >> /etc/pam.d/smtp
+		echo "account requisite                       pam_deny.so" >> /etc/pam.d/smtp
+		echo "account required                        pam_permit.so" >> /etc/pam.d/smtp
+	fi
+
+	# Debian postfix runs in chroot so we need some extra tunning
+	if package_is_installed sasl2-bin; then
+		if [ -d /var/spool/postfix ] && [ -d /var/run/saslauthd ]; then
+			if ! grep -qE "^/var/run/saslauthd\s+/var/spool/postfix/var/run/saslauthd" /etc/fstab; then
+				echo "/var/run/saslauthd /var/spool/postfix/var/run/saslauthd bind defaults,nodev,noauto,bind 0 0" >> /etc/fstab
+			fi
+
+			if [ ! -d /var/spool/postfix/var ]; then
+				mkdir /var/spool/postfix/var
+				dpkg-statoverride --add root root 777 /var/spool/postfix/var
+			fi
+
+			if [ ! -d /var/spool/postfix/var/run/saslauthd ]; then
+				mkdir -p /var/spool/postfix/var/run/saslauthd
+				chown -R root:sasl /var/spool/postfix/var/run/saslauthd
+				chmod 710 /var/spool/postfix/var/run/saslauthd
+				dpkg-statoverride --add root sasl 710 /var/spool/postfix/var/run/saslauthd
+			fi
+
+			mount /var/spool/postfix/var/run/saslauthd
+
+			if ! grep -qE "^mount\s+/var/spool/postfix/var/run/saslauthd$" /etc/rc.local; then
+				sed -i '$i \# Mount saslauthd bind point at postfix chroot\nmount /var/spool/postfix/var/run/saslauthd\n' /etc/rc.local
+			fi
+		fi
+	fi
+
+	# restart the service
+	/etc/init.d/postfix restart
+fi
+
+# --------------------------------------------------------------------
+#                               Cyrus
+# --------------------------------------------------------------------
+if package_is_installed cyrus-imapd; then
+	set_imapd_conf "altnamespace: yes"
+	set_imapd_conf "unixhierarchysep: yes"
+	set_imapd_conf "admins: cyrus"
+	set_imapd_conf "virtdomains: userid"
+	set_imapd_conf "sasl_pwcheck_method: saslauthd"
+	set_imapd_conf "sasl_mech_list: PLAIN LOGIN"
+
+	# Fix Complains about certain missing directories
+	if [ ! -e /var/run/cyrus/lock ]; then
+		mkdir /var/run/cyrus/lock
+		chown cyrus:mail /var/run/cyrus/lock
+		chmod 700 /var/run/cyrus/lock
+	fi
+
+	if [ ! -e /var/run/cyrus/proc ]; then
+		mkdir /var/run/cyrus/proc
+		chown cyrus:mail /var/run/cyrus/proc
+		chmod 700 /var/run/cyrus/proc
+	fi
+
+	# PAM settings for imap
+	if package_is_installed libpam-mysql; then
+		if [ ! -f /etc/pam.d/imap ]; then
+			touch /etc/pam.d/imap
+		fi
+		echo "auth    sufficient                      pam_mysql.so user=$DATABASE_USER passwd=$DATABASE_PASSWORD host=127.0.0.1 db=$DATABASE_DBNAME table=pam_mail_users usercolumn=email passwdcolumn=password crypt=1" > /etc/pam.d/imap
+		echo "auth    [success=1 default=ignore]      pam_unix.so nullok_secure" >> /etc/pam.d/imap
+		echo "auth    requisite                       pam_deny.so" >> /etc/pam.d/imap
+		echo "auth    required                        pam_permit.so" >> /etc/pam.d/imap
+		echo "account sufficient pam_mysql.so user=$DATABASE_USER passwd=$DATABASE_PASSWORD host=localhost db=$DATABASE_DBNAME table=pam_mail_users usercolumn=email passwdcolumn=password crypt=1" >> /etc/pam.d/imap
+		echo "account [success=1 new_authtok_reqd=done default=ignore]        pam_unix.so" >> /etc/pam.d/imap
+		echo "account requisite                       pam_deny.so" >> /etc/pam.d/imap
+		echo "account required                        pam_permit.so" >> /etc/pam.d/imap
+	fi
+
+	# restart the service
+	/etc/init.d/cyrus-imapd restart
+
+	# If we created a mail user it is time to add it
+	if [ -n "$VIRTUAL_EMAIL_USER" ] && [ -n "$VIRTUAL_DOMAIN_NAME" ]; then
+		CYRUS_PASSWORD="$( generate_password )"
+		echo "cyrus:$CYRUS_PASSWORD" | chpasswd
+		echo "$CYRUS_PASSWORD" | saslpasswd2 -p -c cyrus
+		
+		cyradm -u cyrus -w "$CYRUS_PASSWORD"  127.0.0.1 <<< "cm user/$VIRTUAL_EMAIL_USER@$VIRTUAL_DOMAIN_NAME"
+	fi
+fi
+
+if package_is_installed cyrus-pop3d; then
+	# PAM settings for pop3 
+	if package_is_installed libpam-mysql; then
+		if [ ! -f /etc/pam.d/pop ]; then
+			touch /etc/pam.d/pop
+		fi
+		echo "auth    sufficient                      pam_mysql.so user=$DATABASE_USER passwd=$DATABASE_PASSWORD host=127.0.0.1 db=$DATABASE_DBNAME table=pam_mail_users usercolumn=email passwdcolumn=password crypt=1" > /etc/pam.d/pop
+		echo "auth    [success=1 default=ignore]      pam_unix.so nullok_secure" >> /etc/pam.d/pop
+		echo "auth    requisite                       pam_deny.so" >> /etc/pam.d/pop
+		echo "auth    required                        pam_permit.so" >> /etc/pam.d/pop
+		echo "account sufficient pam_mysql.so user=$DATABASE_USER passwd=$DATABASE_PASSWORD host=localhost db=$DATABASE_DBNAME table=pam_mail_users usercolumn=email passwdcolumn=password crypt=1" >> /etc/pam.d/pop
+		echo "account [success=1 new_authtok_reqd=done default=ignore]        pam_unix.so" >> /etc/pam.d/pop
+		echo "account requisite                       pam_deny.so" >> /etc/pam.d/pop
+		echo "account required                        pam_permit.so" >> /etc/pam.d/pop
+	fi
+
+	# restart the service
+	/etc/init.d/cyrus-imapd restart
+fi
