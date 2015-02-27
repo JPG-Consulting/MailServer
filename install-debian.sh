@@ -1,5 +1,9 @@
 #!/bin/bash
 
+
+# ====================================================================
+#                           Functions
+# ====================================================================
 function generate_password() {
 	local __passwd=""
 
@@ -222,6 +226,10 @@ fi
 # Postfix
 if ! package_is_installed postfix; then
 	echo "Installing postfix MTA"
+	if [ -x /etc/init.d/sendmail ]; then
+		/etc/init.d/sendmail stop
+	fi
+
 	if ! DEBIAN_FRONTEND=noninteractive apt-get -y -qq install postfix; then
 		echo "Error: couldn't install postfix"
 		exit 1
@@ -320,7 +328,7 @@ apt-get -y -qq clean
 #                              Database
 # --------------------------------------------------------------------
 DATABASE_USER="cpadmin"
-DATABASE_PASSWORD="1234"
+DATABASE_PASSWORD="$( generate_password )"
 DATABASE_DBNAME="cpanel"
 
 # Create default tables
@@ -328,7 +336,7 @@ mysql -uroot -e "CREATE DATABASE IF NOT EXISTS $DATABASE_DBNAME;"
 mysql -uroot -e "USE $DATABASE_DBNAME;CREATE TABLE IF NOT EXISTS accounts (id int(10) unsigned NOT NULL AUTO_INCREMENT, type varchar(32) CHARACTER SET ascii NOT NULL DEFAULT 'plain', password text CHARACTER SET ascii COLLATE ascii_bin, PRIMARY KEY (id)) ENGINE=InnoDB  DEFAULT CHARSET=utf8;"
 mysql -uroot -e "USE $DATABASE_DBNAME;CREATE TABLE IF NOT EXISTS clients (id int(10) unsigned NOT NULL AUTO_INCREMENT, name varchar(255) NOT NULL, PRIMARY KEY (id)) ENGINE=InnoDB  DEFAULT CHARSET=utf8;"
 mysql -uroot -e "USE $DATABASE_DBNAME;CREATE TABLE IF NOT EXISTS domains (id int(10) unsigned NOT NULL AUTO_INCREMENT, name varchar(255) CHARACTER SET ascii DEFAULT NULL, client_id int(10) unsigned NOT NULL, PRIMARY KEY (id), KEY client_id (client_id), UNIQUE KEY name (name)) ENGINE=InnoDB  DEFAULT CHARSET=utf8;"
-mysql -uroot -e "USE $DATABASE_DBNAME;CREATE TABLE IF NOT EXISTS mail (id int(10) unsigned NOT NULL AUTO_INCREMENT, mail_name varchar(245) CHARACTER SET ascii NOT NULL DEFAULT '', account_id int(10) unsigned NOT NULL, domain_id int(10) unsigned NOT NULL, PRIMARY KEY (id), UNIQUE KEY dom_id (domain_id,mail_name), KEY account_id (account_id)) ENGINE=InnoDB  DEFAULT CHARSET=utf8;"
+mysql -uroot -e "USE $DATABASE_DBNAME;CREATE TABLE IF NOT EXISTS mail (id int(10) unsigned NOT NULL AUTO_INCREMENT, mail_name varchar(245) CHARACTER SET ascii NOT NULL DEFAULT '', quota int(10) NOT NULL default '0', account_id int(10) unsigned NOT NULL, domain_id int(10) unsigned NOT NULL, PRIMARY KEY (id), UNIQUE KEY dom_id (domain_id,mail_name), KEY account_id (account_id)) ENGINE=InnoDB  DEFAULT CHARSET=utf8;"
 mysql -uroot -e "USE $DATABASE_DBNAME;CREATE TABLE IF NOT EXISTS mail_aliases (id int(10) unsigned NOT NULL AUTO_INCREMENT, mail_id int(10) unsigned NOT NULL, alias varchar(245) character set ascii NOT NULL, PRIMARY KEY  (id), UNIQUE KEY mail_id (mail_id,alias)) ENGINE=InnoDB DEFAULT CHARSET=utf8;"
 
 mysql -uroot -e "USE $DATABASE_DBNAME;CREATE VIEW pam_mail_users AS SELECT CONCAT_WS('@', mail.mail_name, domains.name) AS email, accounts.password AS password FROM accounts, domains, mail WHERE domains.id = mail.domain_id AND mail.account_id = accounts.id;"
@@ -383,7 +391,101 @@ if package_is_installed postfix; then
 	adduser postfix mail
 	adduser postfix sasl
 
+	# Postfix database data
+	if [ ! -d /etc/postfix/mysql ]; then
+		mkdir /etc/postfix/mysql
+	fi
 
+	# Some generic config
+	postconf -e "myhostname = $( hostname -f )"
+	postconf -e "mydestination = localhost"
+	postconf -e "relay_domains ="
+	postconf -e "relayhost ="
+	postconf -e "inet_interfaces = all"
+
+	postconf -e "virtual_mailbox_base = /var/mail/vhosts"
+
+	# Domains
+	if [ ! -f /etc/postfix/mysql/domains.cf ]; then
+		touch /etc/postfix/mysql/domains.cf
+	fi
+
+	echo "hosts = 127.0.0.1" > /etc/postfix/mysql/domains.cf
+	echo "user = $DATABASE_USER" >> /etc/postfix/mysql/domains.cf
+	echo "password = $DATABASE_PASSWORD" >> /etc/postfix/mysql/domains.cf
+	echo "dbname = $DATABASE_DBNAME" >> /etc/postfix/mysql/domains.cf
+	echo "query = SELECT name AS virtual FROM domains WHERE name='%s'" >> /etc/postfix/mysql/domains.cf
+	
+	postconf -e "virtual_mailbox_domains = mysql:/etc/postfix/mysql/domains.cf"
+
+	# Virtual mailboxes
+	if [ ! -f /etc/postfix/mysql/mailbox_maps.cf ]; then
+		touch /etc/postfix/mysql/mailbox_maps.cf
+	fi
+
+	echo "hosts = 127.0.0.1" > /etc/postfix/mysql/mailbox_maps.cf
+	echo "user = $DATABASE_USER" >> /etc/postfix/mysql/mailbox_maps.cf
+	echo "password = $DATABASE_PASSWORD" >> /etc/postfix/mysql/mailbox_maps.cf
+	echo "dbname = $DATABASE_DBNAME" >> /etc/postfix/mysql/mailbox_maps.cf
+	echo "query = SELECT CONCAT(domains.name, '/', mail.mail_name, '/') FROM domains, mail WHERE mail.domain_id = domains.id AND mail.mail_name='%u' AND domains.name='%d'" >> /etc/postfix/mysql/mailbox_maps.cf
+	
+	postconf -e "virtual_mailbox_maps = mysql:/etc/postfix/mysql/mailbox_maps.cf"
+
+	# Alias maps
+	if [ ! -f /etc/postfix/mysql/alias_maps.cf ]; then
+		touch /etc/postfix/mysql/alias_maps.cf
+	fi
+
+	echo "hosts = 127.0.0.1" > /etc/postfix/mysql/alias_maps.cf
+	echo "user = $DATABASE_USER" >> /etc/postfix/mysql/alias_maps.cf
+	echo "password = $DATABASE_PASSWORD" >> /etc/postfix/mysql/alias_maps.cf
+	echo "dbname = $DATABASE_DBNAME" >> /etc/postfix/mysql/alias_maps.cf
+	echo "query = SELECT CONCAT_WS('@', mail.mail_name, domains.name) AS destination FROM mail_aliases, mail, domains WHERE mail_aliases.mail_id=mail.id AND mail.domain_id=domains.id AND mail_aliases.alias='%u' AND domains.name='%d'" >> /etc/postfix/mysql/alias_maps.cf
+	
+
+	postconf -e "virtual_alias_maps = mysql:/etc/postfix/mysql/alias_maps.cf"
+
+	## Quotas
+	#if [ ! -f /etc/postfix/mysql/mailbox_limit_maps.cf ]; then
+	#	touch /etc/postfix/mysql/mailbox_limit_maps.cf
+	#fi
+	#
+	#echo "hosts = 127.0.0.1" > /etc/postfix/mysql/mailbox_limit_maps.cf
+	#echo "user = $DATABASE_USER" >> /etc/postfix/mysql/mailbox_limit_maps.cf
+	#echo "password = $DATABASE_PASSWORD" >> /etc/postfix/mysql/mailbox_limit_maps.cf
+	#echo "dbname = $DATABASE_DBNAME" >> /etc/postfix/mysql/mailbox_limit_maps.cf
+	#echo "query = SELECT mail.quota FROM domains, mail WHERE mail.domain_id = domains.id AND mail.mail_name='%u' AND domains.name='%d'" >> /etc/postfix/mysql/mailbox_limit_maps.cf
+	#
+	#postconf -e "virtual_create_maildirsize = yes"
+	#postconf -e "virtual_mailbox_extended = yes"
+	#postconf -e "virtual_mailbox_limit_maps = mysql:/etc/postfix/mailbox_limit_maps.cf"
+	#postconf -e "virtual_mailbox_limit_override = yes"
+	#postconf -e "virtual_maildir_limit_message = Sorry, the your maildir has overdrawn your diskspace quota, please free up some of spaces of your mailbox try again."
+	#postconf -e "virtual_overquota_bounce = yes"
+
+	# Secure the files
+	chown -R root:postfix /etc/postfix/mysql
+	chmod 750 /etc/postfix/mysql
+	chmod 640 /etc/postfix/mysql/*.cf
+
+	# Create a vmail user
+	groupadd -g 5000 vmail
+	useradd -g vmail -u 5000 -s /usr/sbin/nologin vmail
+
+	postconf -e "virtual_minimum_uid = 5000"
+	postconf -e "virtual_uid_maps = static:5000"
+	postconf -e "virtual_gid_maps = static:5000"
+
+	# SASL
+	postconf -e "smtpd_sasl_path = smtpd"
+	postconf -e "smtpd_sasl_auth_enable = yes"
+	postconf -e "broken_sasl_auth_clients = yes"
+	postconf -e "smtpd_sasl_security_options = noanonymous"
+	# Next line is commeted asit is not supported prior to 2.10
+	#postconf -e "smtpd_relay_restrictions = permit_sasl_authenticated reject_unauth_destination"
+	# Previous versions
+	postconf -e "smtpd_recipient_restrictions = permit_sasl_authenticated reject_unauth_destination"
+	
 	
 	# PAM settings for smtpd
 	if package_is_installed libpam-mysql; then
@@ -425,7 +527,24 @@ if package_is_installed postfix; then
 				sed -i '$i \# Mount saslauthd bind point at postfix chroot\nmount /var/spool/postfix/var/run/saslauthd\n' /etc/rc.local
 			fi
 		fi
+
+		if [ ! -f /usr/lib/sasl2/smtpd.conf ]; then
+			touch  /usr/lib/sasl2/smtpd.conf
+		fi
+		echo "pwcheck_method: saslauthd" >  /usr/lib/sasl2/smtpd.conf
+		echo "mech_list: LOGIN PLAIN" >>  /usr/lib/sasl2/smtpd.conf
+		echo "allowanonymouslogin: 0" >>  /usr/lib/sasl2/smtpd.conf
+
 	fi
+
+	if package_is_installed cyrus-imapd; then
+		# Create a LMTP socket inside the chroot environment
+		if ! grep -qE "^\s*lmtppostfix\s+" /etc/cyrus.conf; then
+			sed -i '/^[[:blank:]]lmtpunix[[:blank:]]/a\        lmtppostfix     cmd="lmtpd" listen="/var/spool/postfix/private/lmtp.cyrus" prefork=0 maxchild=20' /etc/cyrus.conf
+		fi
+		postconf -e "virtual_transport = lmtp:unix:/private/lmtp.cyrus"
+	fi
+
 
 	# restart the service
 	/etc/init.d/postfix restart
