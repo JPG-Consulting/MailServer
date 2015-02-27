@@ -528,13 +528,12 @@ if package_is_installed postfix; then
 			fi
 		fi
 
-		if [ ! -f /usr/lib/sasl2/smtpd.conf ]; then
-			touch  /usr/lib/sasl2/smtpd.conf
+		if [ ! -f /etc/postfix/sasl/smtpd.conf ]; then
+			touch  /etc/postfix/sasl/smtpd.conf
 		fi
-		echo "pwcheck_method: saslauthd" >  /usr/lib/sasl2/smtpd.conf
-		echo "mech_list: LOGIN PLAIN" >>  /usr/lib/sasl2/smtpd.conf
-		echo "allowanonymouslogin: 0" >>  /usr/lib/sasl2/smtpd.conf
-
+		echo "pwcheck_method: saslauthd" >  /etc/postfix/sasl/smtpd.conf
+		echo "mech_list: LOGIN PLAIN" >>  /etc/postfix/sasl/smtpd.conf
+		echo "allowanonymouslogin: 0" >>  /etc/postfix/sasl/smtpd.conf
 	fi
 
 	if package_is_installed cyrus-imapd; then
