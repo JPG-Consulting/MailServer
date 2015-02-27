@@ -179,7 +179,7 @@ if ! dpkg -l cyrus-imapd > /dev/null 2>&1; then
 fi
 
 if ! dpkg -l cyrus-admin > /dev/null 2>&1; then
-	if ! apt-get -y -qq install cyrus-pop3d; then
+	if ! apt-get -y -qq install cyrus-admin; then
 		echo "Error: couldn't install cyrus-admin"
 		exit 1
 	fi
