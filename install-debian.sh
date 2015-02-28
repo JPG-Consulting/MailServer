@@ -484,8 +484,7 @@ if package_is_installed postfix; then
 	# Next line is commeted asit is not supported prior to 2.10
 	#postconf -e "smtpd_relay_restrictions = permit_sasl_authenticated reject_unauth_destination"
 	# Previous versions
-	postconf -e "smtpd_recipient_restrictions = permit_sasl_authenticated reject_unauth_destination"
-	
+	postconf -e "smtpd_recipient_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_unauth_destination, reject_non_fqdn_recipient, reject_non_fqdn_sender, reject_unknown_recipient_domain, reject_unknown_sender_domain, reject_unauth_pipelining, reject_unverified_recipient, reject_rbl_client zen.spamhaus.org, reject_rbl_client list.dsbl.org"
 	
 	# PAM settings for smtpd
 	if package_is_installed libpam-mysql; then
